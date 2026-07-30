@@ -1,0 +1,58 @@
+name: Build and Publish to npm
+
+on:
+  push:
+    branches:
+      - self-publish
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # 开启 OIDC 签名权限以生成 Provenance 可信证明
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install
+          npm i -D esbuild yaml typescript
+
+      - name: Update package name and semver version with git hash
+        run: |
+          # 获取 7 位 git short hash
+          SHORT_SHA=$(git rev-parse --short HEAD)
+
+          # 获取 package.json 中的主版本号（例如 0.2.9）
+          BASE_VERSION=$(node -p "require('./package.json').version.split('-')[0]")
+
+          # 组合符合 SemVer 规范的版本号 (例如 0.2.9-git.a1b2c3d)
+          NEW_VERSION="${BASE_VERSION}-git.${SHORT_SHA}"
+
+          # 更新 package.json 中的包名、版本号以及仓库地址
+          npm pkg set name="@wyatex/koishi-plugin-jmcomic"
+          npm pkg set version="${NEW_VERSION}"
+          npm pkg set repository.url="https://github.com/${{ github.repository }}"
+
+          echo "Updated Package: @wyatex/koishi-plugin-jmcomic@${NEW_VERSION}"
+
+      - name: Build with esbuild and tsc
+        run: |
+          node build.mjs
+
+      - name: Publish to npm with Provenance
+        run: npm publish --access public --provenance --tag latest
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

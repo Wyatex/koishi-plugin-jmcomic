@@ -39,8 +39,10 @@
     "@types/archiver": "^6.0.3",
     "@types/pdfkit": "^0.13.4",
     "@types/sharp": "^0.31.1",
+    "esbuild": "^0.28.1",
+    "koishi-plugin-cron": "^3.0.0",
     "koishi-plugin-puppeteer": "^3.0.0",
-    "koishi-plugin-cron": "^3.0.0"
+    "yaml": "^2.9.0"
   },
   "koishi": {
     "description": {
