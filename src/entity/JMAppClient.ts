@@ -33,6 +33,8 @@ import {
 import { Directorys } from "../types";
 import { extname, join } from "path";
 import sharp from "sharp";
+import { createWriteStream } from "fs";
+import PDFDocument from "pdfkit";
 import { Recipe } from "muhammara";
 import { AlbumNotExistError, PhotoNotExistError } from "../error";
 import { JMAppBlog } from "./JMAppBlog";
@@ -436,61 +438,79 @@ export class JMAppClient extends JMClientAbstract {
     }
 
     const pdfPath = join(path, `${pdfName}.pdf`);
-    let pdfDoc: Recipe;
-    // pdf实例
-    try {
-      pdfDoc = new Recipe("new", pdfPath, {
-        version: 1.6,
-      });
-    } catch (error) {
-      throw new Error(error);
-    }
 
     // 临时文件夹
     const tempPath = join(path, `temp_${id}`);
-    await mkdir(tempPath);
+    await mkdir(tempPath, { recursive: true });
 
-    // 循环按顺序添加图片
-    for (const image of images) {
-      let imagePath = join(path, "decoded", image);
-      if (type === "album" && !single) {
-        imagePath = join(path, "decoded", `${id}`, image);
-      }
-      // webp 会导致报错，转成jpg
-      const buffer = await readFile(imagePath);
+    // 禁用 sharp 像素缓存池，防内存泄漏
+    sharp.cache(false);
 
-      const ext = extname(imagePath);
-      // 替换文件扩展名
-      const jpgName = image.replace(ext, ".jpg");
-      // 完整名称
-      const jpgPath = join(tempPath, jpgName);
-      // 转换成jpg
-      const sharpInstance = sharp(buffer);
-      await sharpInstance.jpeg().toFile(jpgPath);
-
-      const metadata = await sharpInstance.metadata();
-      pdfDoc
-        .createPage(metadata.width, metadata.height)
-        .image(jpgPath, 0, 0)
-        .endPage();
-    }
-
-    // 判断是否需要加密
-    if (password) {
-      pdfDoc.encrypt({
+    try {
+      // 1. 初始化 PDFDocument 流式实例
+      const doc = new PDFDocument({
+        autoFirstPage: false,
         userPassword: password,
         ownerPassword: password,
-        userProtectionFlag: 4,
+        permissions: password
+          ? {
+              printing: "highResolution",
+              modifying: false,
+              copying: false,
+              annotating: false,
+            }
+          : undefined,
       });
-    }
-    try {
-      pdfDoc.endPDF(() => {
-        if (this.config.debug) this.logger.info(`PDF ${pdfName}.pdf 生成完成`);
+
+      // 2. 将 PDF 输出直接管道化到磁盘文件流
+      const writeStream = createWriteStream(pdfPath);
+      doc.pipe(writeStream);
+
+      // 3. 循环按顺序添加图片
+      for (const image of images) {
+        let imagePath = join(path, "decoded", image);
+        if (type === "album" && !single) {
+          imagePath = join(path, "decoded", `${id}`, image);
+        }
+        // webp 会导致报错，转成jpg
+        const buffer = await readFile(imagePath);
+
+        const ext = extname(imagePath);
+        // 替换文件扩展名
+        const jpgName = image.replace(ext, ".jpg");
+        // 完整名称
+        const jpgPath = join(tempPath, jpgName);
+        // 转换成jpg
+        const sharpInstance = sharp(buffer);
+        await sharpInstance.jpeg().toFile(jpgPath);
+
+        const metadata = await sharpInstance.metadata();
+        const width = metadata.width || 595.28;
+        const height = metadata.height || 841.89;
+
+        // 动态创建页面并写入图片
+        doc.addPage({ size: [width, height], margin: 0 });
+        doc.image(jpgPath, 0, 0, { width, height });
+
+        // 用完即删单张临时 JPG
+        await rm(jpgPath, { force: true });
+      }
+
+      // 4. 结束文档并等待写入流 finish
+      doc.end();
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on("finish", () => {
+          if (this.config.debug)
+            this.logger.info(`PDF ${pdfName}.pdf 生成完成`);
+          resolve();
+        });
+        writeStream.on("error", reject);
       });
     } catch (error) {
-      throw new Error(error);
+      throw new Error(error instanceof Error ? error.message : String(error));
     } finally {
-      await rm(tempPath, { recursive: true });
+      sharp.cache(true);
+      await rm(tempPath, { recursive: true, force: true });
     }
 
     return pdfPath;
