@@ -304,11 +304,9 @@ export class JMHtmlClient extends JMClientAbstract {
         version: 16,
         ...(password
           ? {
-              encryptionOptions: {
-                userPassword: password,
-                ownerPassword: password,
-                userProtectionFlag: 4,
-              },
+              userPassword: password,
+              ownerPassword: password,
+              userProtectionFlag: 4,
             }
           : {}),
       });
