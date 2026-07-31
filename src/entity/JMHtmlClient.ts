@@ -15,7 +15,7 @@ import { JMHtmlAlbum } from "./JMHtmlAlbum";
 import { JMHtmlPhoto } from "./JMHtmlPhoto";
 import { archiverImage, decodeImage, saveImage } from "../utils/Image";
 import { join } from "path";
-import { Recipe } from "muhammara";
+import { type PDFWriter, Recipe, createWriter } from "muhammara";
 import sharp from "sharp";
 import { Directorys } from "../types";
 
@@ -297,11 +297,18 @@ export class JMHtmlClient extends JMClientAbstract {
     }
 
     const pdfPath = join(path, `${pdfName}.pdf`);
-    let pdfDoc: Recipe;
-    // pdf实例
+    let pdfWriter: PDFWriter;
+    // pdf实例（流式写入器）
     try {
-      pdfDoc = new Recipe("new", pdfPath, {
-        version: 1.6,
+      pdfWriter = createWriter(pdfPath, {
+        version: 16,
+        ...(password
+          ? {
+              userPassword: password,
+              ownerPassword: password,
+              userProtectionFlag: 4,
+            }
+          : {}),
       });
     } catch (error) {
       throw new Error(error);
@@ -311,43 +318,42 @@ export class JMHtmlClient extends JMClientAbstract {
     const tempPath = join(path, `temp_${id}`);
     await mkdir(tempPath);
 
-    // 循环按顺序添加图片
-    for (const image of images) {
-      let imagePath = join(path, "decoded", image);
-      if (type === "album" && !single) {
-        imagePath = join(path, "decoded", `${id}`, image);
-      }
-      // webp 会导致报错，转成jpg
-      const buffer = await readFile(imagePath);
-
-      // 替换文件扩展名
-      const jpgName = image.replace(".webp", ".jpg");
-      // 完整名称
-      const jpgPath = join(tempPath, jpgName);
-      // 转换成jpg
-      const sharpInstance = sharp(buffer);
-      await sharpInstance.jpeg().toFile(jpgPath);
-
-      const metadata = await sharpInstance.metadata();
-      pdfDoc
-        .createPage(metadata.width, metadata.height)
-        .image(jpgPath, 0, 0)
-        .endPage();
-    }
-
-    // 判断是否需要加密
-    if (password) {
-      pdfDoc.encrypt({
-        userPassword: password,
-        ownerPassword: password,
-        userProtectionFlag: 4,
-      });
-    }
     try {
-      pdfDoc.endPDF(() => {
-        this.logger.info(`${pdfName}.pdf 生成完成`);
-      });
+      // 循环按顺序添加图片
+      for (const image of images) {
+        let imagePath = join(path, "decoded", image);
+        if (type === "album" && !single) {
+          imagePath = join(path, "decoded", `${id}`, image);
+        }
+        // webp 会导致报错，转成jpg
+        const buffer = await readFile(imagePath);
+
+        // 替换文件扩展名
+        const jpgName = image.replace(".webp", ".jpg");
+        // 完整名称
+        const jpgPath = join(tempPath, jpgName);
+        // 转换成jpg
+        const sharpInstance = sharp(buffer);
+        await sharpInstance.jpeg().toFile(jpgPath);
+
+        const metadata = await sharpInstance.metadata();
+        const page = pdfWriter.createPage(
+          0,
+          0,
+          metadata.width,
+          metadata.height
+        );
+        const pageContent = pdfWriter.startPageContentContext(page);
+        pageContent.drawImage(0, 0, jpgPath);
+        pdfWriter.writePage(page);
+      }
+
+      pdfWriter.end();
+      this.logger.info(`${pdfName}.pdf 生成完成`);
     } catch (error) {
+      try {
+        pdfWriter.end();
+      } catch (_) {}
       throw new Error(error);
     } finally {
       await rm(tempPath, { recursive: true });
